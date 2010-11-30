@@ -1,0 +1,36 @@
+<?xml version="1.0"  encoding="ISO-8859-1"?>
+<!DOCTYPE Configure PUBLIC "-//Mort Bay Consulting//DTD Configure//EN" "http://jetty.eclipse.org/configure.dtd">
+
+<!--
+Configure a custom context for the javadoc.
+
+This context contains only a ServletHandler with a default servlet
+to serve static html files and images.
+-->
+
+<Configure class="org.eclipse.jetty.server.handler.ContextHandler">
+    <Set name="contextPath">/</Set>
+    <Set name="resourceBase">/data/releases/aiotrade.com/</Set>
+    <Set name="handler">
+        <New class="org.eclipse.jetty.server.handler.ResourceHandler">
+            <Set name="welcomeFiles">
+                <Array type="String">
+                    <Item>index.html</Item>
+                    <Item>contents.html</Item> <!-- the index if javadoc not generated -->
+                </Array>
+            </Set>
+            <Set name="cacheControl">max-age=3600,public</Set>
+        </New>
+    </Set>
+    
+    <Set name="virtualHosts">
+        <Array type="String">
+            <Item>www.aiotrade.com</Item>
+            <Item>www.aiotrade.org</Item>
+            <Item>aiotrade.com</Item>
+            <Item>aiotrade.org</Item>
+        </Array>
+    </Set>
+
+</Configure>
+

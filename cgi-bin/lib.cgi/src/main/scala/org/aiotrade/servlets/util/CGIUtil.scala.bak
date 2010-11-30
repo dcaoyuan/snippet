@@ -1,0 +1,262 @@
+/*
+ * To change this template, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+package org.aiotrade.servlets.util
+
+import java.io.BufferedReader
+import java.io.IOException
+import java.io.InputStream
+import java.io.InputStreamReader
+import java.io.OutputStream
+import java.util.logging.Logger
+import javax.servlet.ServletException
+import javax.servlet.http.HttpServletResponse
+
+object CGIUtil {
+  val log = Logger.getLogger(this.getClass.getName)
+
+  @throws(classOf[IOException])
+  @throws(classOf[ServletException])
+  def flowResponse(res: HttpServletResponse, cgiin: InputStream) {
+    val buf = new Array[Byte](2048)
+    var c = -1
+    try {
+      c = setResponseHeaders(res, cgiin)
+      val resout = res.getOutputStream
+      if (c != -1) {
+        resout.write(c)
+      }
+      c = writeResponseContent(resout, cgiin, buf)
+    } finally {
+      // Attempt to consume any leftover byte if something bad happens,
+      // such as a socket disconnect on the servlet side; otherwise, the
+      // external process could hang
+      while (c != -1) {
+        c = cgiin.read(buf)
+      }
+    }
+  }
+
+  @throws(classOf[IOException])
+  def setResponseHeaders_for_ref(res: HttpServletResponse, cgiin: InputStream) = {
+    // --- set headers
+    val cgiHeaderReader = new BufferedReader(new InputStreamReader(new HTTPHeaderInputStream(cgiin)))
+    var line: String = null
+    while ({line = cgiHeaderReader.readLine; line != null && line != ""}) {
+      log.fine("Response: addHeader(\"" + line + "\")")
+
+      val idxOfColon = line.indexOf(":")
+      if (line.startsWith("HTTP")) {
+        res.setStatus(getStatusCodeFromHttpStatusLine(line))
+      } else if (idxOfColon >= 0) {
+        val header = line.substring(0, idxOfColon).trim
+        val value = line.substring(idxOfColon + 1).trim
+        if (header.equalsIgnoreCase("status")) {
+          res.setStatus(getStatusCodeCFromCGIStatusHeader(value))
+        } else {
+          res.addHeader(header, value)
+        }
+      } else {
+        log.warning("Response: bad header line \"" + line + "\"")
+      }
+    }
+  }
+
+  @throws(classOf[IOException])
+  private def setResponseHeaders(res: HttpServletResponse, cgiin: InputStream): Int = {
+    var c = cgiin.read
+    if (c == -1) {
+      log.severe("Can't contact CGI")
+      res.sendError(HttpServletResponse.SC_BAD_GATEWAY)
+      return -1
+    }
+
+    val keysb = new StringBuilder
+    val valsb = new StringBuilder
+    while (c != -1) {
+      keysb.setLength(0)
+      valsb.setLength(0)
+
+      while (c != -1 && c != ' ' && c != '\r' && c != '\n' && c != ':') {
+        keysb append c.toChar
+        c = cgiin.read
+      }
+
+      while (c != -1 && c == ' ' || c == ':') {
+        c = cgiin.read
+      }
+
+      while (c != -1 && c != '\r' && c != '\n') {
+        valsb append c.toChar
+        c = cgiin.read
+      }
+
+      if (c == '\r') {
+        c = cgiin.read
+        if (c == '\n') {
+          c = cgiin.read
+        }
+      }
+
+      if (keysb.length == 0) {
+        return c
+      } else {
+        val k = keysb.toString
+        val v = valsb.toString
+
+        log.fine("cgi response header: " + k + ": " + v)
+
+        if (k.equalsIgnoreCase("status")) {
+          var status = getStatusCodeCFromCGIStatusHeader(v)
+          res.setStatus(status)
+        } else if (k.startsWith("http") || k.startsWith("HTTP")) {
+        } else if (k.equalsIgnoreCase("location")) {
+          // don't do res.sendRedirect(v) here, otherwise, cookies won't be accecpted by browser
+          res.addHeader(k, v)
+        } else if (k.equalsIgnoreCase("set-cookie") || k.equalsIgnoreCase("set-cookie2")) {
+          res.addHeader(k, v)
+        } else {
+          res.addHeader(k, v)
+        }
+      }
+    }
+
+    -1
+  }
+
+  @throws(classOf[IOException])
+  def writeResponseContent(resout: OutputStream, cgiin: InputStream, buf: Array[Byte]): Int = {
+    var c = -1
+    while ({c = cgiin.read(buf); c != -1}) {
+      log.fine("CGI: output " + c + " bytes of data")
+      resout.write(buf, 0, c)
+    }
+    c
+  }
+
+  /**
+   * Parses the Status-Line and extracts the status code.
+   *
+   * @param line The HTTP Status-Line (RFC2616, section 6.1)
+   * @return The extracted status code or the code representing an
+   * internal error if a valid status code cannot be extracted.
+   */
+  def getStatusCodeFromHttpStatusLine(line: String): Int = {
+    val statusStart = line.indexOf(' ') + 1
+
+    if (statusStart < 1 || line.length < statusStart + 3) {
+      // Not a valid HTTP Status-Line
+      log.warning("Response: invalid HTTP Status-Line:" + line)
+      return HttpServletResponse.SC_INTERNAL_SERVER_ERROR
+    }
+
+    val status = line.substring(statusStart, statusStart + 3)
+
+    toStatusCode(status)
+  }
+
+  /**
+   * Parses the CGI Status Header value and extracts the status code.
+   *
+   * @param value The CGI Status value of the form <code>
+   *             digit digit digit SP reason-phrase</code>
+   * @return The extracted status code or the code representing an
+   * internal error if a valid status code cannot be extracted.
+   */
+  def getStatusCodeCFromCGIStatusHeader(value: String): Int = {
+    if (value.length < 3) {
+      // Not a valid status value
+      log.warning("Response: invalid status value:" + value)
+      return HttpServletResponse.SC_INTERNAL_SERVER_ERROR
+    }
+
+    val status = value.substring(0, 3)
+
+    toStatusCode(status)
+  }
+
+  private def toStatusCode(status: String): Int = {
+    var statusCode = 0
+    try {
+      statusCode = status.toInt
+    } catch {
+      case nfe: NumberFormatException =>
+        // Not a valid status code
+        log.warning("Response: invalid status code:" + status)
+        return HttpServletResponse.SC_INTERNAL_SERVER_ERROR
+    }
+
+    statusCode
+  }
+
+
+
+  /**
+   * This is an input stream specifically for reading HTTP headers. It reads
+   * upto and including the two blank lines terminating the headers. It
+   * allows the content to be read using bytes or characters as appropriate.
+   */
+  class HTTPHeaderInputStream(input: InputStream) extends InputStream {
+
+    private val STATE_CHARACTER  = 0
+    private val STATE_FIRST_CR   = 1
+    private val STATE_FIRST_LF   = 2
+    private val STATE_SECOND_CR  = 3
+    private val STATE_HEADER_END = 4
+
+    private var state = STATE_CHARACTER
+
+    /**
+     * @see java.io.InputStream#read
+     */
+    @throws(classOf[IOException])
+    def read: Int = {
+      if (state == STATE_HEADER_END) {
+        return -1
+      }
+
+      val i = input.read
+
+      // Update the state
+      // State machine looks like this
+      //
+      //    -------->--------
+      //   |      (CR)       |
+      //   |                 |
+      //  CR1--->---         |
+      //   |        |        |
+      //   ^(CR)    |(LF)    |
+      //   |        |        |
+      // CHAR--->--LF1--->--EOH
+      //      (LF)  |  (LF)  |
+      //            |(CR)    ^(LF)
+      //            |        |
+      //          (CR2)-->---
+
+      state = i match {
+        case 10 =>
+          // LF
+          state match {
+            case STATE_CHARACTER => STATE_FIRST_LF
+            case STATE_FIRST_CR  => STATE_FIRST_LF
+            case STATE_FIRST_LF | STATE_SECOND_CR => STATE_HEADER_END
+          }
+
+        case 13 =>
+          // CR
+          state match {
+            case STATE_CHARACTER => STATE_FIRST_CR
+            case STATE_FIRST_CR  => STATE_HEADER_END
+            case STATE_FIRST_LF  => STATE_SECOND_CR
+          }
+
+        case _ =>STATE_CHARACTER
+      }
+
+      i
+    }
+  }  // class HTTPHeaderInputStream
+
+}
